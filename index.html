@@ -403,6 +403,7 @@
   }
   .badge.mine { background: rgba(30, 58, 138, 0.13); color: var(--blue); }
   .badge.others { background: rgba(15, 122, 82, 0.16); color: var(--green); }
+  .badge.combined { background: rgba(20, 20, 26, 0.1); color: var(--ink); }
   .badge.active { background: rgba(15, 122, 82, 0.14); color: var(--green); }
   .badge.closed { background: rgba(139, 150, 190, 0.18); color: var(--muted); }
   .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
@@ -430,6 +431,7 @@
   .split-card { padding: 20px; }
   .split-card.mine { border-top: 3px solid var(--indigo); }
   .split-card.others { border-top: 3px solid var(--periwinkle); }
+  .split-card.combined { border-top: 3px solid var(--ink); }
   .split-card h3 { font-size: 1.1rem; display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
   .kv { display: flex; justify-content: space-between; align-items: center; padding: 11px 0; border-bottom: 1px solid rgba(30, 58, 138, 0.08); }
   .kv:last-child { border-bottom: none; }
@@ -638,6 +640,7 @@
         <option value="">All types</option>
         <option value="mine">My Own Money</option>
         <option value="others">Others' Money</option>
+        <option value="combined">Combined (pooled)</option>
       </select>
       <select id="filterStatus" aria-label="Filter by status">
         <option value="">All statuses</option>
@@ -751,8 +754,9 @@
           <div class="field">
             <label class="lbl">Type <span class="req">*</span></label>
             <div class="segment" id="typeSeg">
-              <button type="button" class="on" data-val="mine">My Own Money</button>
-              <button type="button" data-val="others">Others' Money</button>
+              <button type="button" class="on" data-val="mine">My Money</button>
+              <button type="button" data-val="others">Others'</button>
+              <button type="button" data-val="combined">Combined</button>
             </div>
             <input type="hidden" id="f-type" value="mine" />
           </div>
@@ -770,7 +774,8 @@
             <div class="err" id="e-return"></div>
           </div>
 
-          <div class="field full">
+          <!-- Commission section (hidden for Combined entries) -->
+          <div class="field full" id="commSection">
             <label class="lbl">Commission</label>
             <div class="segment" id="commSeg">
               <button type="button" class="on" data-val="flat">Flat amount</button>
@@ -778,12 +783,17 @@
               <button type="button" data-val="pct_principal">% of principal</button>
             </div>
             <input type="hidden" id="f-commMode" value="flat" />
-          </div>
-
-          <div class="field full">
-            <label class="lbl" for="f-commValue" id="commValueLbl">Commission amount</label>
+            <label class="lbl" for="f-commValue" id="commValueLbl" style="margin-top:14px;">Commission amount</label>
             <input type="number" id="f-commValue" placeholder="0" min="0" step="any" inputmode="decimal" />
             <div class="err" id="e-commValue"></div>
+          </div>
+
+          <!-- Combined section (shown only for Combined entries) -->
+          <div class="field full" id="combinedSection" style="display:none;">
+            <label class="lbl" for="f-othersPay">Payout to others <span class="req">*</span></label>
+            <input type="number" id="f-othersPay" placeholder="0.00" min="0" step="any" inputmode="decimal" />
+            <div class="hint">Total you hand back to the other investors (their capital + their profit). Whatever is left of the return is your take.</div>
+            <div class="err" id="e-othersPay"></div>
           </div>
 
           <div class="field">
@@ -809,10 +819,10 @@
           <!-- Live preview -->
           <div class="field full">
             <div class="preview" id="livePreview">
-              <div class="p"><span>Profit</span><strong id="pv-profit">—</strong></div>
-              <div class="p"><span>Commission</span><strong id="pv-comm">—</strong></div>
-              <div class="p"><span>Margin</span><strong id="pv-margin">—</strong></div>
-              <div class="p"><span>Net to investor</span><strong id="pv-net">—</strong></div>
+              <div class="p"><span id="pv-l1">Profit</span><strong id="pv-v1">—</strong></div>
+              <div class="p"><span id="pv-l2">Commission</span><strong id="pv-v2">—</strong></div>
+              <div class="p"><span id="pv-l3">Margin</span><strong id="pv-v3">—</strong></div>
+              <div class="p"><span id="pv-l4">Net to investor</span><strong id="pv-v4">—</strong></div>
             </div>
           </div>
         </div>
@@ -887,16 +897,39 @@ function saveState() {
 ========================================================================= */
 /**
  * Compute derived numbers for an entry.
- * commMode: "flat" | "pct_profit" | "pct_principal"
- *   flat          -> commission = commValue (a currency amount)
- *   pct_profit    -> commission = commValue% of profit
- *   pct_principal -> commission = commValue% of principal
- * profit    = return - principal
- * margin %  = (commission / principal) * 100
+ *
+ * MINE / OTHERS entries:
+ *   commMode: "flat" | "pct_profit" | "pct_principal"
+ *   profit    = return - principal
+ *   commission depends on commMode; margin = (commission / principal) * 100
+ *
+ * COMBINED (pooled) entries:
+ *   principal = whole pooled amount, return = whole return
+ *   othersPay = total paid back to the other investors (their capital + their profit)
+ *   myTake    = return - othersPay  (the leftover — the user's total AND profit)
+ *   For portfolio roll-ups the combined entry's "profit" is myTake (the user's take)
+ *   and commission is 0 (no fee concept — the earning is the leftover itself).
+ *   poolProfit = return - principal is kept for reference.
  */
 function derive(e) {
   const principal = Number(e.principal) || 0;
   const returnAmt = Number(e.returnAmt) || 0;
+
+  if (e.type === "combined") {
+    const othersPay = Number(e.othersPay) || 0;
+    const myTake = returnAmt - othersPay;          // leftover = my total = my profit
+    const poolProfit = returnAmt - principal;      // reference: whole-pool profit
+    const margin = principal > 0 ? (myTake / principal) * 100 : 0;
+    return {
+      principal, returnAmt,
+      profit: myTake,          // user's take drives the Profit column & totals
+      commission: 0,
+      margin,
+      netToInvestor: othersPay, // what the other investors receive
+      isCombined: true, othersPay, myTake, poolProfit,
+    };
+  }
+
   const commValue = Number(e.commValue) || 0;
   const profit = returnAmt - principal;
 
@@ -909,7 +942,7 @@ function derive(e) {
   // Net returned to the investor after the manager takes commission.
   const netToInvestor = returnAmt - commission;
 
-  return { principal, returnAmt, profit, commission, margin, netToInvestor };
+  return { principal, returnAmt, profit, commission, margin, netToInvestor, isCombined: false };
 }
 
 /** Aggregate totals across a set of entries. */
@@ -999,7 +1032,7 @@ function openModal(entry) {
   document.getElementById("modalSave").textContent = entry ? "Save changes" : "Save entry";
 
   // Reset errors
-  ["name", "principal", "return", "commValue", "date"].forEach((k) => setError(k, ""));
+  ["name", "principal", "return", "commValue", "othersPay", "date"].forEach((k) => setError(k, ""));
 
   // Populate fields (or defaults)
   document.getElementById("entryId").value = entry ? entry.id : "";
@@ -1007,6 +1040,7 @@ function openModal(entry) {
   document.getElementById("f-principal").value = entry ? entry.principal : "";
   document.getElementById("f-return").value = entry ? entry.returnAmt : "";
   document.getElementById("f-commValue").value = entry ? entry.commValue : "";
+  document.getElementById("f-othersPay").value = entry && entry.othersPay != null ? entry.othersPay : "";
   document.getElementById("f-notes").value = entry ? (entry.notes || "") : "";
   document.getElementById("f-date").value = entry ? entry.date : new Date().toISOString().slice(0, 10);
 
@@ -1014,6 +1048,7 @@ function openModal(entry) {
   setSegment("commSeg", "f-commMode", entry ? entry.commMode : "flat");
   setSegment("statusSeg", "f-status", entry ? entry.status : "active");
 
+  updateTypeUI();
   updateCommLabel();
   updatePreview();
 
@@ -1050,9 +1085,16 @@ function setSegment(segId, hiddenId, val) {
   seg.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.val === val));
   document.getElementById(hiddenId).value = val;
 }
-initSegment("typeSeg", "f-type", updatePreview);
+initSegment("typeSeg", "f-type", () => { updateTypeUI(); updatePreview(); });
 initSegment("commSeg", "f-commMode", () => { updateCommLabel(); updatePreview(); });
 initSegment("statusSeg", "f-status");
+
+/** Show the commission section for mine/others, or the combined section for combined. */
+function updateTypeUI() {
+  const isCombined = document.getElementById("f-type").value === "combined";
+  document.getElementById("commSection").style.display = isCombined ? "none" : "";
+  document.getElementById("combinedSection").style.display = isCombined ? "" : "none";
+}
 
 /** Swap the commission-value label + placeholder based on chosen mode. */
 function updateCommLabel() {
@@ -1065,18 +1107,29 @@ function updateCommLabel() {
 }
 
 /* Live preview updates as the user types */
-["f-principal", "f-return", "f-commValue"].forEach((id) =>
+["f-principal", "f-return", "f-commValue", "f-othersPay"].forEach((id) =>
   document.getElementById(id).addEventListener("input", updatePreview));
 
+function setPreviewTile(n, label, value, cls) {
+  document.getElementById("pv-l" + n).textContent = label;
+  const v = document.getElementById("pv-v" + n);
+  v.textContent = value;
+  v.className = cls || "";
+}
+
 function updatePreview() {
-  const draft = readForm();
-  const d = derive(draft);
-  document.getElementById("pv-profit").textContent = fmtCurrency(d.profit);
-  document.getElementById("pv-profit").className = signClass(d.profit);
-  document.getElementById("pv-comm").textContent = fmtCurrency(d.commission);
-  document.getElementById("pv-margin").textContent = fmtPct(d.margin);
-  document.getElementById("pv-margin").className = d.margin >= 0 ? "pos" : "neg";
-  document.getElementById("pv-net").textContent = fmtCurrency(d.netToInvestor);
+  const d = derive(readForm());
+  if (d.isCombined) {
+    setPreviewTile(1, "Others' payout", fmtCurrency(d.othersPay));
+    setPreviewTile(2, "My take", fmtCurrency(d.myTake), signClass(d.myTake));
+    setPreviewTile(3, "My profit", fmtCurrency(d.myTake), signClass(d.myTake));
+    setPreviewTile(4, "Pool profit", fmtCurrency(d.poolProfit), signClass(d.poolProfit));
+  } else {
+    setPreviewTile(1, "Profit", fmtCurrency(d.profit), signClass(d.profit));
+    setPreviewTile(2, "Commission", fmtCurrency(d.commission));
+    setPreviewTile(3, "Margin", fmtPct(d.margin), d.margin >= 0 ? "pos" : "neg");
+    setPreviewTile(4, "Net to investor", fmtCurrency(d.netToInvestor));
+  }
 }
 
 /** Read the current form into a plain entry-shaped object (unsaved). */
@@ -1089,6 +1142,7 @@ function readForm() {
     returnAmt: parseFloat(document.getElementById("f-return").value),
     commMode: document.getElementById("f-commMode").value,
     commValue: parseFloat(document.getElementById("f-commValue").value) || 0,
+    othersPay: parseFloat(document.getElementById("f-othersPay").value) || 0,
     date: document.getElementById("f-date").value,
     status: document.getElementById("f-status").value,
     notes: document.getElementById("f-notes").value.trim(),
@@ -1097,7 +1151,7 @@ function readForm() {
 
 function setError(key, msg) {
   const err = document.getElementById("e-" + key);
-  const inputMap = { name: "f-name", principal: "f-principal", return: "f-return", commValue: "f-commValue", date: "f-date" };
+  const inputMap = { name: "f-name", principal: "f-principal", return: "f-return", commValue: "f-commValue", othersPay: "f-othersPay", date: "f-date" };
   const input = document.getElementById(inputMap[key]);
   if (err) err.textContent = msg;
   if (input) input.classList.toggle("invalid", !!msg);
@@ -1119,10 +1173,19 @@ document.getElementById("entryForm").addEventListener("submit", (e) => {
 
   if (isNaN(data.returnAmt) || data.returnAmt < 0) { setError("return", "Enter a valid return (0 or more)."); ok = false; } else setError("return", "");
 
-  if (isNaN(data.commValue) || data.commValue < 0) { setError("commValue", "Commission cannot be negative."); ok = false; }
-  else if ((data.commMode === "pct_profit" || data.commMode === "pct_principal") && data.commValue > 100) {
-    setError("commValue", "Percentage looks too high (max 100%)."); ok = false;
-  } else setError("commValue", "");
+  if (data.type === "combined") {
+    // Combined: validate the payout to others (commission not used).
+    setError("commValue", "");
+    if (isNaN(data.othersPay) || data.othersPay < 0) { setError("othersPay", "Enter a valid payout (0 or more)."); ok = false; }
+    else if (data.othersPay > data.returnAmt) { setError("othersPay", "Payout can't exceed the total return."); ok = false; }
+    else setError("othersPay", "");
+  } else {
+    setError("othersPay", "");
+    if (isNaN(data.commValue) || data.commValue < 0) { setError("commValue", "Commission cannot be negative."); ok = false; }
+    else if ((data.commMode === "pct_profit" || data.commMode === "pct_principal") && data.commValue > 100) {
+      setError("commValue", "Percentage looks too high (max 100%)."); ok = false;
+    } else setError("commValue", "");
+  }
 
   if (!data.date) { setError("date", "Please choose the investment date."); ok = false; } else setError("date", "");
 
@@ -1238,15 +1301,17 @@ function renderTable() {
     return `<tr>
       <td data-label="Name / Source" class="name-cell" style="text-align:left;">
         <strong>${escapeHtml(e.name)}</strong>
-        ${e.notes ? `<small>${escapeHtml(e.notes.length > 48 ? e.notes.slice(0, 48) + "…" : e.notes)}</small>` : ""}
+        ${d.isCombined
+          ? `<small>Pooled · Others paid ${fmtCurrency(d.othersPay)}</small>`
+          : (e.notes ? `<small>${escapeHtml(e.notes.length > 48 ? e.notes.slice(0, 48) + "…" : e.notes)}</small>` : "")}
       </td>
       <td data-label="Type">
-        <span class="badge ${e.type}">${e.type === "mine" ? "My Money" : "Others'"}</span>
+        <span class="badge ${e.type}">${e.type === "mine" ? "My Money" : e.type === "others" ? "Others'" : "Combined"}</span>
       </td>
       <td data-label="Principal" class="num">${fmtCurrency(d.principal)}</td>
       <td data-label="Return" class="num">${fmtCurrency(d.returnAmt)}</td>
-      <td data-label="Profit" class="num ${signClass(d.profit)}">${d.profit >= 0 ? "+" : ""}${fmtCurrency(d.profit)}</td>
-      <td data-label="Commission" class="num">${fmtCurrency(d.commission)}</td>
+      <td data-label="${d.isCombined ? "My profit" : "Profit"}" class="num ${signClass(d.profit)}">${d.profit >= 0 ? "+" : ""}${fmtCurrency(d.profit)}</td>
+      <td data-label="Commission" class="num">${d.isCombined ? "—" : fmtCurrency(d.commission)}</td>
       <td data-label="Margin" class="num ${d.margin >= 0 ? "pos" : "neg"}">${fmtPct(d.margin)}</td>
       <td data-label="Date">${fmtDate(e.date)}</td>
       <td data-label="Status"><span class="badge ${e.status}"><span class="dot"></span>${e.status === "active" ? "Active" : "Closed"}</span></td>
@@ -1375,19 +1440,24 @@ function renderDashboardCharts() {
     });
   }
 
-  /* --- Capital allocation (doughnut: mine vs others invested) --- */
+  /* --- Capital allocation (doughnut: mine vs others vs combined invested) --- */
   destroyChart("alloc");
   const mine = totals(entries.filter((e) => e.type === "mine")).invested;
   const others = totals(entries.filter((e) => e.type === "others")).invested;
+  const combined = totals(entries.filter((e) => e.type === "combined")).invested;
   const allocCtx = document.getElementById("allocChart");
-  if (mine + others === 0) {
+  const allocLabels = ["My Own Money", "Others' Money"];
+  const allocData = [mine, others];
+  const allocColors = ["#1e3a8a", "#0f7a52"];
+  if (combined > 0) { allocLabels.push("Combined (pooled)"); allocData.push(combined); allocColors.push("#14141a"); }
+  if (mine + others + combined === 0) {
     drawEmptyChart(allocCtx, "No capital allocated yet");
   } else {
     charts.alloc = new Chart(allocCtx, {
       type: "doughnut",
-      data: { labels: ["My Own Money", "Others' Money"], datasets: [{
-        data: [mine, others],
-        backgroundColor: ["#1e3a8a", "#0f7a52"],
+      data: { labels: allocLabels, datasets: [{
+        data: allocData,
+        backgroundColor: allocColors,
         borderColor: "#f8f7f2", borderWidth: 3, hoverOffset: 8,
       }]},
       options: {
@@ -1407,6 +1477,8 @@ function renderDashboardCharts() {
 function renderBreakdown() {
   const mine = totals(entries.filter((e) => e.type === "mine"));
   const others = totals(entries.filter((e) => e.type === "others"));
+  const combined = totals(entries.filter((e) => e.type === "combined"));
+  const hasCombined = entries.some((e) => e.type === "combined");
   const grand = totals(entries);
 
   const mkCard = (title, t, cls, note) => {
@@ -1428,15 +1500,37 @@ function renderBreakdown() {
     </div>`;
   };
 
+  // Combined (pooled) card — different rows: shows payout to others + my take
+  const mkCombinedCard = () => {
+    const paidOthers = combined.returns - combined.profit; // sum of payouts to others
+    const roi = combined.invested > 0 ? (combined.profit / combined.invested) * 100 : 0;
+    const share = grand.invested > 0 ? (combined.invested / grand.invested) * 100 : 0;
+    return `<div class="card split-card combined rise">
+      <h3><span class="badge combined">Combined</span> pooled deals</h3>
+      <div class="kv"><span>Pooled invested</span><strong>${fmtCurrency(combined.invested)}</strong></div>
+      <div class="kv"><span>Total return</span><strong>${fmtCurrency(combined.returns)}</strong></div>
+      <div class="kv"><span>Paid to others</span><strong>${fmtCurrency(paidOthers)}</strong></div>
+      <div class="kv"><span>My take (profit)</span><strong class="${signClass(combined.profit)}">${combined.profit >= 0 ? "+" : ""}${fmtCurrency(combined.profit)}</strong></div>
+      <div class="kv"><span>ROI on pool</span><strong class="${roi >= 0 ? "pos" : "neg"}">${roi.toFixed(1)}%</strong></div>
+      <div style="margin-top:14px;">
+        <div class="hint">Share of portfolio: ${share.toFixed(0)}% of capital</div>
+        <div class="bar-track"><div class="bar-fill" style="width:${share}%;background:linear-gradient(90deg, var(--ink), var(--blue));"></div></div>
+      </div>
+    </div>`;
+  };
+
   document.getElementById("splitCards").innerHTML =
     mkCard("performance", mine, "mine", "Share of portfolio") +
-    mkCard("performance", others, "others", "Share of portfolio");
+    mkCard("performance", others, "others", "Share of portfolio") +
+    (hasCombined ? mkCombinedCard() : "");
 }
 
 function renderBreakdownCharts() {
   chartDefaults();
   const mine = totals(entries.filter((e) => e.type === "mine"));
   const others = totals(entries.filter((e) => e.type === "others"));
+  const combined = totals(entries.filter((e) => e.type === "combined"));
+  const hasCombined = entries.some((e) => e.type === "combined");
 
   /* --- Grouped comparison bar --- */
   destroyChart("compare");
@@ -1444,15 +1538,16 @@ function renderBreakdownCharts() {
   if (entries.length === 0) {
     drawEmptyChart(compCtx, "No data to compare yet");
   } else {
+    const datasets = [
+      { label: "My Money", data: [mine.invested, mine.returns, mine.profit, mine.commission], backgroundColor: "#1e3a8a", borderRadius: 8, maxBarThickness: 42 },
+      { label: "Others'", data: [others.invested, others.returns, others.profit, others.commission], backgroundColor: "#0f7a52", borderRadius: 8, maxBarThickness: 42 },
+    ];
+    if (hasCombined) datasets.push(
+      { label: "Combined", data: [combined.invested, combined.returns, combined.profit, combined.commission], backgroundColor: "#14141a", borderRadius: 8, maxBarThickness: 42 }
+    );
     charts.compare = new Chart(compCtx, {
       type: "bar",
-      data: {
-        labels: ["Invested", "Returns", "Profit", "Commission"],
-        datasets: [
-          { label: "My Money", data: [mine.invested, mine.returns, mine.profit, mine.commission], backgroundColor: "#1e3a8a", borderRadius: 8, maxBarThickness: 42 },
-          { label: "Others'", data: [others.invested, others.returns, others.profit, others.commission], backgroundColor: "#0f7a52", borderRadius: 8, maxBarThickness: 42 },
-        ],
-      },
+      data: { labels: ["Invested", "Returns", "My profit", "Commission"], datasets },
       options: baseOpts({ money: true, legend: true }),
     });
   }
@@ -1591,7 +1686,7 @@ function normalizeEntry(o) {
   if (!o || typeof o !== "object") return null;
   const principal = Number(o.principal);
   if (!(principal > 0)) return null; // must have a real principal
-  const type = o.type === "others" ? "others" : "mine";
+  const type = ["others", "combined"].includes(o.type) ? o.type : "mine";
   const commMode = ["flat", "pct_profit", "pct_principal"].includes(o.commMode) ? o.commMode : "flat";
   const status = o.status === "closed" ? "closed" : "active";
   let date = o.date;
@@ -1604,6 +1699,7 @@ function normalizeEntry(o) {
     returnAmt: Number(o.returnAmt) || 0,
     commMode,
     commValue: Number(o.commValue) || 0,
+    othersPay: Number(o.othersPay) || 0,
     date: String(date).slice(0, 10),
     status,
     notes: String(o.notes || "").slice(0, 1000),
