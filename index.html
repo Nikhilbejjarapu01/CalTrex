@@ -236,7 +236,7 @@
   /* Stat cards */
   .stats {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
     gap: 14px;
   }
   .stat {
@@ -516,7 +516,6 @@
 
   /* ======================= Responsive ======================= */
   @media (max-width: 900px) {
-    .stats { grid-template-columns: repeat(2, 1fr); }
     .charts-grid, .split, .backup-grid { grid-template-columns: 1fr; }
     .preview { grid-template-columns: repeat(2, 1fr); }
   }
@@ -1374,6 +1373,11 @@ function renderStatCards() {
       label: "Total invested", value: fmtCurrency(t.invested),
       sub: `${entries.length} ${entries.length === 1 ? "entry" : "entries"}`,
       color: "var(--indigo)", icon: '<path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
+    },
+    {
+      label: "Total returns", value: fmtCurrency(t.returns),
+      sub: "Money returned so far", color: "var(--blue-light)",
+      icon: '<path d="M21 12a9 9 0 1 1-9-9"/><path d="M21 3v6h-6"/><path d="M12 7v5l3 2"/>',
     },
     {
       label: "Total profit", value: (t.profit >= 0 ? "+" : "") + fmtCurrency(t.profit),
